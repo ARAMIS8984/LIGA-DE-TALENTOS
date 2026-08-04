@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Liga de Talentos SENA — Panel Administrador</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap');
 
@@ -280,6 +281,21 @@
   .field textarea{ resize:vertical; min-height:110px; font-family:'JetBrains Mono', monospace; font-size:12.5px; }
   .field .hint{ font-size:11px; color: var(--ink-dim); margin-top:5px; }
 
+  .upload-box{
+    border: 2px dashed var(--line);
+    border-radius: 12px;
+    padding: 22px 16px;
+    text-align:center;
+    cursor:pointer;
+    transition: border-color .15s ease, background .15s ease;
+    background: #fafafa;
+  }
+  .upload-box:hover{ border-color: var(--green); background: var(--green-soft); }
+  .upload-box.dragover{ border-color: var(--orange); background: var(--orange-soft); }
+  .upload-box #uploadIcon{ font-size:26px; margin-bottom:6px; }
+  .upload-box #uploadText{ font-size:12.5px; color: var(--ink-dim); line-height:1.5; }
+  .upload-box #uploadText strong{ color: var(--green-deep); }
+
   .row-2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 
   /* Lista de aprendices detectados */
@@ -392,15 +408,24 @@
           <input type="text" id="fichaPrograma" placeholder="Ej. Mecanizado industrial">
         </div>
         <div class="field">
-          <label>Pegar reporte de juicios de evaluación</label>
+          <label>Reporte de juicios de evaluación</label>
+
+          <div class="upload-box" id="uploadBox" onclick="document.getElementById('excelInput').click()">
+            <input type="file" id="excelInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="procesarExcel(this.files[0])">
+            <div id="uploadIcon">📄</div>
+            <div id="uploadText"><strong>Sube el Excel del reporte</strong><br>o arrástralo aquí (.xlsx, .xls, .csv)</div>
+          </div>
+
+          <div class="divider">o pega el texto manualmente</div>
+
           <textarea id="reporteJuicios" placeholder="Documento&#9;Nombre&#9;Estado
 1002345678&#9;Juan Pérez&#9;EN FORMACION
 1002345679&#9;Laura Gómez&#9;APLAZADO"></textarea>
-          <div class="hint">Pega las columnas tal como salen del reporte (documento, nombre, estado). Se filtra automáticamente "EN FORMACIÓN".</div>
+          <div class="hint">Se detectan las columnas de documento, nombre y estado, y se filtra automáticamente quién está "EN FORMACIÓN".</div>
         </div>
         <div class="modal-actions">
           <button class="btn btn-ghost" onclick="cerrarModal()">Cancelar</button>
-          <button class="btn btn-primary" onclick="procesarReporte()">Detectar aprendices →</button>
+          <button class="btn btn-primary" onclick="procesarReporte()">Detectar aprendices desde el texto →</button>
         </div>
       </div>
 
@@ -444,6 +469,96 @@
     var fichas = [];       // { numero, categoria, programa, aprendices: [...] }
     var pendientes = [];   // aprendices detectados en el paso 1, antes de confirmar
 
+    // Normaliza texto para comparar encabezados sin tildes/mayúsculas
+    function normalizar(s){
+      return (s || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
+    }
+
+    function procesarExcel(file){
+      if(!file) return;
+      var numero = document.getElementById('fichaNumero').value.trim();
+      if(!numero){ mostrarToast('Primero ingresa el número de ficha'); return; }
+
+      var box = document.getElementById('uploadBox');
+      document.getElementById('uploadText').innerHTML = '<strong>Leyendo ' + file.name + '...</strong>';
+
+      var reader = new FileReader();
+      reader.onload = function(e){
+        try{
+          var data = new Uint8Array(e.target.result);
+          var workbook = XLSX.read(data, { type: 'array' });
+          var hoja = workbook.Sheets[workbook.SheetNames[0]];
+          var filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
+
+          // Busca la fila de encabezados (documento / nombre / estado / juicio)
+          var idxDoc = -1, idxNombre = -1, idxEstado = -1, filaEncabezado = -1;
+          for(var i = 0; i < Math.min(filas.length, 15); i++){
+            var fila = filas[i].map(normalizar);
+            var dTest = fila.findIndex(function(c){ return c.indexOf('documento') > -1 || c.indexOf('cedula') > -1 || c.indexOf('identificacion') > -1; });
+            var nTest = fila.findIndex(function(c){ return c.indexOf('nombre') > -1 || c.indexOf('aprendiz') > -1; });
+            var eTest = fila.findIndex(function(c){ return c.indexOf('estado') > -1 || c.indexOf('juicio') > -1; });
+            if(dTest > -1 && nTest > -1){
+              idxDoc = dTest; idxNombre = nTest; idxEstado = eTest;
+              filaEncabezado = i;
+              break;
+            }
+          }
+
+          if(filaEncabezado === -1){
+            mostrarToast('No se encontraron columnas de documento/nombre en el archivo');
+            document.getElementById('uploadText').innerHTML = '<strong>Sube el Excel del reporte</strong><br>o arrástralo aquí (.xlsx, .xls, .csv)';
+            return;
+          }
+
+          pendientes = [];
+          for(var r = filaEncabezado + 1; r < filas.length; r++){
+            var row = filas[r];
+            if(!row || !row.length) continue;
+            var doc = (row[idxDoc] || '').toString().trim();
+            var nombre = (row[idxNombre] || '').toString().trim();
+            var estado = idxEstado > -1 ? (row[idxEstado] || '').toString().trim() : '';
+            if(!/^\d+$/.test(doc) || !nombre) continue;
+            var enFormacion = /EN FORMACI/i.test(estado) || idxEstado === -1;
+            pendientes.push({ doc: doc, nombre: nombre, estado: estado || 'SIN ESTADO', enFormacion: enFormacion });
+          }
+
+          if(pendientes.length === 0){
+            mostrarToast('El archivo no tiene filas de aprendices válidas');
+            document.getElementById('uploadText').innerHTML = '<strong>Sube el Excel del reporte</strong><br>o arrástralo aquí (.xlsx, .xls, .csv)';
+            return;
+          }
+
+          renderPendientes();
+          document.getElementById('paso1').style.display = 'none';
+          document.getElementById('paso2').style.display = 'block';
+          document.getElementById('stepLabel').textContent = '2';
+          document.getElementById('stepBar2').classList.add('done');
+        }catch(err){
+          console.error(err);
+          mostrarToast('No se pudo leer el archivo. Verifica que sea un Excel válido.');
+          document.getElementById('uploadText').innerHTML = '<strong>Sube el Excel del reporte</strong><br>o arrástralo aquí (.xlsx, .xls, .csv)';
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    // Permite arrastrar y soltar el archivo sobre la caja de carga
+    (function(){
+      var box = document.getElementById('uploadBox');
+      if(!box) return;
+      ['dragover','dragenter'].forEach(function(ev){
+        box.addEventListener(ev, function(e){ e.preventDefault(); box.classList.add('dragover'); });
+      });
+      ['dragleave','drop'].forEach(function(ev){
+        box.addEventListener(ev, function(e){ e.preventDefault(); box.classList.remove('dragover'); });
+      });
+      box.addEventListener('drop', function(e){
+        if(e.dataTransfer.files && e.dataTransfer.files[0]){
+          procesarExcel(e.dataTransfer.files[0]);
+        }
+      });
+    })();
+
     function abrirModal(){
       document.getElementById('modalOverlay').classList.add('open');
       volverPaso1();
@@ -451,6 +566,8 @@
       document.getElementById('fichaCategoria').value = '';
       document.getElementById('fichaPrograma').value = '';
       document.getElementById('reporteJuicios').value = '';
+      document.getElementById('excelInput').value = '';
+      document.getElementById('uploadText').innerHTML = '<strong>Sube el Excel del reporte</strong><br>o arrástralo aquí (.xlsx, .xls, .csv)';
     }
     function cerrarModal(){
       document.getElementById('modalOverlay').classList.remove('open');
