@@ -396,7 +396,7 @@
         <div class="row-2">
           <div class="field">
             <label>Número de ficha</label>
-            <input type="text" id="fichaNumero" placeholder="Ej. 2758941">
+            <input type="text" id="fichaNumero" placeholder="Ej. 2758941" oninput="this.style.borderColor=''; this.style.boxShadow='';">
           </div>
           <div class="field">
             <label>Categoría</label>
@@ -421,7 +421,7 @@
           <textarea id="reporteJuicios" placeholder="Documento&#9;Nombre&#9;Estado
 1002345678&#9;Juan Pérez&#9;EN FORMACION
 1002345679&#9;Laura Gómez&#9;APLAZADO"></textarea>
-          <div class="hint">Se detectan las columnas de documento, nombre y estado, y se filtra automáticamente quién está "EN FORMACIÓN".</div>
+          <div class="hint">El número de ficha, programa y categoría se llenan solos si están en el Excel. Los que no encuentre, los dejará vacíos para que los completes tú.</div>
         </div>
         <div class="modal-actions">
           <button class="btn btn-ghost" onclick="cerrarModal()">Cancelar</button>
@@ -474,10 +474,57 @@
       return (s || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
     }
 
+    // Busca el primer valor no vacío a la derecha de una celda (salta columnas vacías)
+    function valorALaDerecha(fila, desde){
+      for(var k = desde; k < Math.min(fila.length, desde + 6); k++){
+        if(fila[k] !== undefined && fila[k] !== null && fila[k].toString().trim() !== ''){
+          return fila[k].toString().trim();
+        }
+      }
+      return '';
+    }
+
+    // Recorre las primeras filas del Excel buscando datos sueltos como
+    // "Ficha de Caracterización: 3146336" o "Denominación: ...",
+    // y llena los campos del formulario solo si el admin no los llenó a mano.
+    function buscarDatosFicha(filas){
+      var campoNumero = document.getElementById('fichaNumero');
+      var campoPrograma = document.getElementById('fichaPrograma');
+      var campoCategoria = document.getElementById('fichaCategoria');
+
+      for(var i = 0; i < Math.min(filas.length, 20); i++){
+        var fila = filas[i];
+        for(var c = 0; c < fila.length; c++){
+          var celda = (fila[c] || '').toString();
+          var celdaNorm = normalizar(celda);
+          if(!celdaNorm) continue;
+
+          // Número de ficha: "Ficha de Caracterización:" (el valor puede venir varias columnas después)
+          if(!campoNumero.value && celdaNorm.indexOf('ficha') > -1){
+            var numEnCelda = celda.match(/\d{5,}/);
+            if(numEnCelda){
+              campoNumero.value = numEnCelda[0];
+            } else {
+              var val = valorALaDerecha(fila, c + 1);
+              if(/\d{5,}/.test(val)) campoNumero.value = val.match(/\d{5,}/)[0];
+            }
+          }
+
+          // Programa de formación: en el reporte de juicios aparece como "Denominación:"
+          if(!campoPrograma.value && (celdaNorm.indexOf('denominacion') > -1 || celdaNorm.indexOf('programa de formacion') > -1)){
+            campoPrograma.value = valorALaDerecha(fila, c + 1);
+          }
+
+          // Categoría / nivel de formación (si el reporte lo trae)
+          if(!campoCategoria.value && (celdaNorm.indexOf('nivel de formacion') > -1 || celdaNorm.indexOf('categoria') > -1)){
+            campoCategoria.value = valorALaDerecha(fila, c + 1);
+          }
+        }
+      }
+    }
+
     function procesarExcel(file){
       if(!file) return;
-      var numero = document.getElementById('fichaNumero').value.trim();
-      if(!numero){ mostrarToast('Primero ingresa el número de ficha'); return; }
 
       var box = document.getElementById('uploadBox');
       document.getElementById('uploadText').innerHTML = '<strong>Leyendo ' + file.name + '...</strong>';
@@ -490,15 +537,19 @@
           var hoja = workbook.Sheets[workbook.SheetNames[0]];
           var filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
 
-          // Busca la fila de encabezados (documento / nombre / estado / juicio)
-          var idxDoc = -1, idxNombre = -1, idxEstado = -1, filaEncabezado = -1;
-          for(var i = 0; i < Math.min(filas.length, 15); i++){
+          // 1) Busca en las primeras filas datos sueltos de la ficha (número, programa, categoría)
+          buscarDatosFicha(filas);
+
+          // 2) Busca la fila de encabezados de la tabla de aprendices
+          var idxDoc = -1, idxNombre = -1, idxApellidos = -1, idxEstado = -1, filaEncabezado = -1;
+          for(var i = 0; i < Math.min(filas.length, 25); i++){
             var fila = filas[i].map(normalizar);
-            var dTest = fila.findIndex(function(c){ return c.indexOf('documento') > -1 || c.indexOf('cedula') > -1 || c.indexOf('identificacion') > -1; });
-            var nTest = fila.findIndex(function(c){ return c.indexOf('nombre') > -1 || c.indexOf('aprendiz') > -1; });
-            var eTest = fila.findIndex(function(c){ return c.indexOf('estado') > -1 || c.indexOf('juicio') > -1; });
+            var dTest = fila.findIndex(function(c){ return (c.indexOf('documento') > -1 && c.indexOf('tipo') === -1) || c.indexOf('cedula') > -1 || c.indexOf('identificacion') > -1; });
+            var nTest = fila.findIndex(function(c){ return c.indexOf('nombre') > -1; });
+            var aTest = fila.findIndex(function(c){ return c.indexOf('apellido') > -1; });
+            var eTest = fila.findIndex(function(c){ return c.indexOf('estado') > -1; });
             if(dTest > -1 && nTest > -1){
-              idxDoc = dTest; idxNombre = nTest; idxEstado = eTest;
+              idxDoc = dTest; idxNombre = nTest; idxApellidos = aTest; idxEstado = eTest;
               filaEncabezado = i;
               break;
             }
@@ -511,15 +562,24 @@
           }
 
           pendientes = [];
+          var vistos = {}; // evita duplicados: el reporte trae una fila por cada juicio de evaluación
           for(var r = filaEncabezado + 1; r < filas.length; r++){
             var row = filas[r];
             if(!row || !row.length) continue;
             var doc = (row[idxDoc] || '').toString().trim();
-            var nombre = (row[idxNombre] || '').toString().trim();
+            if(!/^\d+$/.test(doc) || vistos[doc]) continue;
+
+            var nombreCompleto = (row[idxNombre] || '').toString().trim();
+            if(idxApellidos > -1){
+              nombreCompleto = (nombreCompleto + ' ' + (row[idxApellidos] || '').toString().trim()).trim();
+            }
+            if(!nombreCompleto) continue;
+
             var estado = idxEstado > -1 ? (row[idxEstado] || '').toString().trim() : '';
-            if(!/^\d+$/.test(doc) || !nombre) continue;
             var enFormacion = /EN FORMACI/i.test(estado) || idxEstado === -1;
-            pendientes.push({ doc: doc, nombre: nombre, estado: estado || 'SIN ESTADO', enFormacion: enFormacion });
+
+            vistos[doc] = true;
+            pendientes.push({ doc: doc, nombre: nombreCompleto, estado: estado || 'SIN ESTADO', enFormacion: enFormacion });
           }
 
           if(pendientes.length === 0){
@@ -631,6 +691,16 @@
       var numero = document.getElementById('fichaNumero').value.trim();
       var categoria = document.getElementById('fichaCategoria').value.trim() || 'Sin categoría';
       var programa = document.getElementById('fichaPrograma').value.trim() || 'Sin programa';
+
+      if(!numero){
+        mostrarToast('Falta el número de ficha — el Excel no lo traía, complétalo');
+        volverPaso1();
+        var campoNumero = document.getElementById('fichaNumero');
+        campoNumero.style.borderColor = 'var(--danger)';
+        campoNumero.style.boxShadow = '0 0 0 3px rgba(214,69,69,.15)';
+        campoNumero.focus();
+        return;
+      }
 
       var seleccionados = pendientes.filter(function(a, i){
         var chk = document.getElementById('chk'+i);
