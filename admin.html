@@ -881,12 +881,23 @@
 
       var { error: errAprendices } = await sb.from('aprendices').insert(filas);
 
+      // 3) Crea el acceso de cada aprendiz: usuario = cédula, contraseña = número de ficha
+      var erroresAcceso = 0;
+      if(!errAprendices){
+        var resultados = await Promise.all(seleccionados.map(function(a){
+          return sb.rpc('crear_acceso_aprendiz', { p_documento: a.doc, p_password: numero });
+        }));
+        erroresAcceso = resultados.filter(function(r){ return r.error; }).length;
+      }
+
       boton.textContent = 'Guardar ficha';
 
       if(errAprendices){
         mostrarToast('Ficha creada, pero hubo un error con algunos aprendices: ' + errAprendices.message);
+      } else if(erroresAcceso > 0){
+        mostrarToast('Ficha guardada, pero ' + erroresAcceso + ' aprendices no recibieron acceso');
       } else {
-        mostrarToast('Ficha ' + numero + ' guardada con ' + seleccionados.length + ' aprendices');
+        mostrarToast('Ficha ' + numero + ' guardada — ' + seleccionados.length + ' aprendices pueden entrar con su cédula y esta ficha como clave');
       }
 
       cerrarModal();
