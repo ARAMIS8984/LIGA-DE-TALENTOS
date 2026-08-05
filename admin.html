@@ -365,7 +365,18 @@
       <div class="stat-card"><div class="num" id="statFichas">0</div><div class="lbl">Fichas activas</div></div>
       <div class="stat-card"><div class="num" id="statAprendices">0</div><div class="lbl">Aprendices cargados</div></div>
       <div class="stat-card accent"><div class="num" id="statInscritos">0</div><div class="lbl">Inscritos</div></div>
-      <div class="stat-card"><div class="num">0</div><div class="lbl">Categorías</div></div>
+      <div class="stat-card"><div class="num" id="statCompetencias">0</div><div class="lbl">Competencias</div></div>
+    </div>
+
+    <div class="section-title" style="display:flex; align-items:center; justify-content:space-between; margin-top:6px;">
+      <span>Competencias</span>
+      <button class="btn btn-primary" style="padding:8px 14px; font-size:12px;" onclick="abrirModalCompetencia()">+ Crear competencia</button>
+    </div>
+    <div id="competenciaListWrap">
+      <div class="empty-state" id="emptyStateCompetencias">
+        Aún no has creado ninguna competencia.<br>Los aprendices de tus fichas podrán inscribirse en cuanto crees la primera.
+      </div>
+      <div id="competenciaList"></div>
     </div>
 
     <div class="section-title">Fichas registradas</div>
@@ -375,6 +386,51 @@
         Todavía no has creado ninguna ficha.<br>Usa "+ Crear ficha" para cargar la primera.
       </div>
       <div id="fichaList"></div>
+    </div>
+  </div>
+
+  <!-- ===== Modal Crear competencia ===== -->
+  <div class="modal-overlay" id="modalOverlayCompetencia">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>Crear competencia</h2>
+        <button class="modal-close" onclick="cerrarModalCompetencia()">✕</button>
+      </div>
+      <div class="modal-sub">Cualquier aprendiz cargado en tus fichas podrá inscribirse.</div>
+
+      <div class="field">
+        <label>Nombre de la competencia</label>
+        <input type="text" id="compNombre" placeholder="Ej. Diseño Asistido por Computador — SolidWorks">
+      </div>
+      <div class="row-2">
+        <div class="field">
+          <label>Tolerancia de peso — mínimo (g)</label>
+          <input type="number" id="compTolMin" placeholder="Ej. 495">
+        </div>
+        <div class="field">
+          <label>Tolerancia de peso — máximo (g)</label>
+          <input type="number" id="compTolMax" placeholder="Ej. 505">
+        </div>
+      </div>
+      <div class="row-2">
+        <div class="field">
+          <label>Inscripciones abren</label>
+          <input type="datetime-local" id="compInscInicio">
+        </div>
+        <div class="field">
+          <label>Inscripciones cierran</label>
+          <input type="datetime-local" id="compInscFin">
+        </div>
+      </div>
+      <div class="field">
+        <label>Fecha y hora de la prueba</label>
+        <input type="datetime-local" id="compFechaPrueba">
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="cerrarModalCompetencia()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarCompetencia()">Crear competencia</button>
+      </div>
     </div>
   </div>
 
@@ -619,6 +675,99 @@
       });
     })();
 
+    function abrirModalCompetencia(){
+      document.getElementById('modalOverlayCompetencia').classList.add('open');
+      document.getElementById('compNombre').value = '';
+      document.getElementById('compTolMin').value = '';
+      document.getElementById('compTolMax').value = '';
+      document.getElementById('compInscInicio').value = '';
+      document.getElementById('compInscFin').value = '';
+      document.getElementById('compFechaPrueba').value = '';
+    }
+    function cerrarModalCompetencia(){
+      document.getElementById('modalOverlayCompetencia').classList.remove('open');
+    }
+
+    async function guardarCompetencia(){
+      var nombre = document.getElementById('compNombre').value.trim();
+      var tolMin = document.getElementById('compTolMin').value;
+      var tolMax = document.getElementById('compTolMax').value;
+      var inscInicio = document.getElementById('compInscInicio').value;
+      var inscFin = document.getElementById('compInscFin').value;
+      var fechaPrueba = document.getElementById('compFechaPrueba').value;
+
+      if(!nombre){ mostrarToast('Ponle un nombre a la competencia'); return; }
+      if(!inscInicio || !inscFin || !fechaPrueba){ mostrarToast('Completa las tres fechas'); return; }
+
+      var boton = document.querySelector('#modalOverlayCompetencia .btn-primary');
+      boton.textContent = 'Creando...';
+
+      var { error } = await sb.from('competencias').insert({
+        nombre: nombre,
+        categoria: nombre,
+        tolerancia_peso_min: tolMin ? Number(tolMin) : null,
+        tolerancia_peso_max: tolMax ? Number(tolMax) : null,
+        inscripcion_inicio: new Date(inscInicio).toISOString(),
+        inscripcion_fin: new Date(inscFin).toISOString(),
+        fecha_prueba: new Date(fechaPrueba).toISOString(),
+        fase: 'inscripcion'
+      });
+
+      boton.textContent = 'Crear competencia';
+
+      if(error){
+        mostrarToast('No se pudo crear: ' + error.message);
+        return;
+      }
+
+      mostrarToast('Competencia "' + nombre + '" creada — ya está abierta a inscripción');
+      cerrarModalCompetencia();
+      cargarCompetencias();
+    }
+
+    var FASES_LABEL = {
+      inscripcion: 'Inscripción abierta',
+      grupos: 'Fase de grupos',
+      octavos: 'Octavos de final',
+      cuartos: 'Cuartos de final',
+      semifinal: 'Semifinal',
+      final: 'Final',
+      finalizada: 'Finalizada'
+    };
+
+    async function cargarCompetencias(){
+      var { data, error } = await sb
+        .from('competencias')
+        .select('id, nombre, fase, inscripcion_inicio, inscripcion_fin, fecha_prueba')
+        .order('created_at', { ascending: false });
+
+      if(error){ console.error(error); return; }
+
+      var wrap = document.getElementById('competenciaList');
+      var empty = document.getElementById('emptyStateCompetencias');
+      wrap.innerHTML = '';
+      empty.style.display = (data && data.length) ? 'none' : 'block';
+
+      (data || []).forEach(function(c){
+        var fechaPrueba = new Date(c.fecha_prueba);
+        var fechaTxt = fechaPrueba.toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' });
+
+        var card = document.createElement('div');
+        card.className = 'ficha-card';
+        card.innerHTML =
+          '<div class="ficha-badge">PRUEBA<br>'+fechaTxt+'</div>' +
+          '<div class="ficha-info">' +
+            '<div class="name">'+c.nombre+'</div>' +
+            '<div class="meta">'+(FASES_LABEL[c.fase] || c.fase)+'</div>' +
+          '</div>' +
+          '<div class="ficha-status '+(c.fase === 'inscripcion' ? 'activa' : 'pendiente')+'">'+(c.fase === 'inscripcion' ? 'Inscribiendo' : 'En curso')+'</div>';
+        wrap.appendChild(card);
+      });
+
+      document.getElementById('statCompetencias').textContent = (data || []).length;
+    }
+    cargarCompetencias();
+
     function abrirModal(){
       document.getElementById('modalOverlay').classList.add('open');
       volverPaso1();
@@ -761,12 +910,10 @@
       empty.style.display = (fichasDb && fichasDb.length) ? 'none' : 'block';
 
       var totalAprendices = 0;
-      var categoriasUnicas = {};
 
       (fichasDb || []).forEach(function(f){
         var cantidad = (f.aprendices || []).length;
         totalAprendices += cantidad;
-        categoriasUnicas[f.categoria] = true;
 
         var card = document.createElement('div');
         card.className = 'ficha-card';
@@ -782,7 +929,6 @@
 
       document.getElementById('statFichas').textContent = (fichasDb || []).length;
       document.getElementById('statAprendices').textContent = totalAprendices;
-      document.querySelectorAll('.stats-row .stat-card')[3].querySelector('.num').textContent = Object.keys(categoriasUnicas).length;
 
       var { count: inscritosCount } = await sb.from('inscripciones').select('id', { count: 'exact', head: true });
       document.getElementById('statInscritos').textContent = inscritosCount || 0;
