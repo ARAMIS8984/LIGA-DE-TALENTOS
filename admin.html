@@ -934,6 +934,7 @@
             '<div class="name">'+f.programa+'</div>' +
             '<div class="meta">'+f.categoria+' · '+cantidad+' aprendices habilitados</div>' +
           '</div>' +
+          '<button class="btn btn-ghost" style="padding:8px 12px; font-size:11.5px; flex-shrink:0;" onclick="event.stopPropagation(); generarAccesos(\''+f.id+'\', \''+f.numero+'\', this)">Generar accesos</button>' +
           '<div class="ficha-status '+(f.estado === 'activa' ? 'activa' : 'pendiente')+'">'+(f.estado === 'activa' ? 'Activa' : 'Inactiva')+'</div>';
         wrap.appendChild(card);
       });
@@ -946,6 +947,34 @@
     }
 
     cargarFichas();
+
+    // Crea (o repara) el acceso de todos los aprendices de una ficha:
+    // usuario = cédula, contraseña = número de esa ficha
+    async function generarAccesos(fichaId, numeroFicha, boton){
+      boton.textContent = 'Generando...';
+      var { data: aprendicesFicha, error } = await sb
+        .from('aprendices')
+        .select('documento')
+        .eq('ficha_id', fichaId);
+
+      if(error){
+        mostrarToast('No se pudo leer la ficha: ' + error.message);
+        boton.textContent = 'Generar accesos';
+        return;
+      }
+
+      var resultados = await Promise.all((aprendicesFicha || []).map(function(a){
+        return sb.rpc('crear_acceso_aprendiz', { p_documento: a.documento, p_password: numeroFicha });
+      }));
+      var errores = resultados.filter(function(r){ return r.error; }).length;
+
+      boton.textContent = 'Generar accesos';
+      if(errores > 0){
+        mostrarToast(errores + ' aprendices no pudieron recibir acceso');
+      } else {
+        mostrarToast('Acceso generado para ' + (aprendicesFicha || []).length + ' aprendices de la ficha ' + numeroFicha);
+      }
+    }
 
     function mostrarToast(msg){
       var t = document.getElementById('toast');
