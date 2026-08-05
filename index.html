@@ -408,7 +408,7 @@
       <div class="stats-strip stats-strip--desktop">
         <div><div class="num js-stat-fichas">—</div><div class="lbl">Fichas activas</div></div>
         <div><div class="num js-stat-inscritos">—</div><div class="lbl">Inscritos</div></div>
-        <div><div class="num js-stat-categorias">—</div><div class="lbl">Categorías</div></div>
+        <div><div class="num js-stat-competencias">—</div><div class="lbl">Competencias</div></div>
       </div>
     </div>
 
@@ -446,7 +446,7 @@
       <div class="stats-strip stats-strip--mobile">
         <div><div class="num js-stat-fichas">—</div><div class="lbl">Fichas activas</div></div>
         <div><div class="num js-stat-inscritos">—</div><div class="lbl">Inscritos</div></div>
-        <div><div class="num js-stat-categorias">—</div><div class="lbl">Categorías</div></div>
+        <div><div class="num js-stat-competencias">—</div><div class="lbl">Competencias</div></div>
       </div>
 
       <div style="height:36px;"></div>
@@ -492,23 +492,18 @@
       try{
         var fichas = await sb.from('fichas').select('id', { count: 'exact', head: true }).eq('estado', 'activa');
         var inscritos = await sb.from('inscripciones').select('id', { count: 'exact', head: true });
-        var categorias = await sb.from('fichas').select('categoria');
+        var competencias = await sb.from('competencias').select('id', { count: 'exact', head: true });
 
         var totalFichas = fichas.count || 0;
         var totalInscritos = inscritos.count || 0;
-        var totalCategorias = 0;
-        if(categorias.data){
-          var set = {};
-          categorias.data.forEach(function(f){ if(f.categoria) set[f.categoria] = true; });
-          totalCategorias = Object.keys(set).length;
-        }
+        var totalCompetencias = competencias.count || 0;
 
         document.querySelectorAll('.js-stat-fichas').forEach(function(el){ el.textContent = totalFichas; });
         document.querySelectorAll('.js-stat-inscritos').forEach(function(el){ el.textContent = totalInscritos; });
-        document.querySelectorAll('.js-stat-categorias').forEach(function(el){ el.textContent = totalCategorias; });
+        document.querySelectorAll('.js-stat-competencias').forEach(function(el){ el.textContent = totalCompetencias; });
       }catch(err){
         console.error('No se pudieron cargar las estadísticas:', err);
-        document.querySelectorAll('.js-stat-fichas, .js-stat-inscritos, .js-stat-categorias').forEach(function(el){ el.textContent = '0'; });
+        document.querySelectorAll('.js-stat-fichas, .js-stat-inscritos, .js-stat-competencias').forEach(function(el){ el.textContent = '0'; });
       }
     }
     cargarEstadisticas();
